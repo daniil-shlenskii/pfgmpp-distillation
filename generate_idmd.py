@@ -126,7 +126,7 @@ def parse_int_list(s):
 
 @click.option('--sigma_min', type=click.FloatRange(min=0, min_open=True), default=0.002, show_default=True, help='Minimum noise level')
 @click.option('--sigma_max', type=click.FloatRange(min=0, min_open=True), default=80, show_default=True, help='Maximum noise level')
-@click.option('--D', type=str, default="inf", show_default=True, help='Divergence dimension D for IDMD')
+@click.option('--aug_dim', type=str, default="inf", show_default=True, help='Divergence dimension D for IDMD')
 
 @click.option('--num_steps', type=click.IntRange(min=1), default=1, show_default=True, help='Number of sampling steps')
 @click.option('--multistep_mode', type=str, default="uniform", show_default=True, help='Multistep mode for IDMD')
@@ -141,7 +141,7 @@ def main(
     max_batch_size,
     sigma_min,
     sigma_max,
-    D,
+    aug_dim,
     num_steps,
     multistep_mode,
     device=torch.device('cuda'),
@@ -181,10 +181,10 @@ def main(
         rnd = StackedRandomGenerator(device, batch_seeds)
 
         # Create latents (TODO: pfgmpp latents)
-        if D == "inf": # EDM case
+        if aug_dim == "inf": # EDM case
             latents = rnd.randn([batch_size, net.img_channels, net.img_resolution, net.img_resolution], sigma_max=sigma_max, device=device)
         else: # PFGMPP case
-            latents = rnd.rand_beta_prime([batch_size, net.img_channels, net.img_resolution, net.img_resolution], sigma_max=sigma_max, D=D, device=device)
+            latents = rnd.rand_beta_prime([batch_size, net.img_channels, net.img_resolution, net.img_resolution], sigma_max=sigma_max, D=aug_dim, device=device)
 
         # Create labels if applicable
         class_labels = None
@@ -204,7 +204,7 @@ def main(
                 class_labels=class_labels,
                 sigma_min=sigma_min,
                 sigma_max=sigma_max,
-                D=D,
+                D=aug_dim,
                 num_steps=num_steps,
                 multistep_mode=multistep_mode,
             )
