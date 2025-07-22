@@ -48,11 +48,11 @@ def idmd_sampler(
     )
     x_noisy = latents.to(torch.float64)
     for i, sigma in enumerate(sigma_schedule):
-        sigma = torch.full_like(x_noisy, sigma)
+        sigma = torch.tensor([sigma] * len(x_noisy), dtype=x_noisy.dtype, device=x_noisy.device)
         x_denoised = net(x_noisy, sigma, class_labels).to(torch.float64)
         if i < len(sigma_schedule) - 1:
             sigma_next = sigma_schedule[i + 1]
-            sigma_next = torch.full_like(sigma_next, sigma_schedule[i + 1])
+            sigma_next = torch.tensor([sigma_next] * len(x_noisy), dtype=x_noisy.dtype, device=x_noisy.device)
             x_noisy = sample_from_posterior(images=x_denoised, sigma=sigma_next, D=D)
     return x_denoised
 
