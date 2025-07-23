@@ -20,17 +20,16 @@ def training_loop(
     run_dir             = '.',      # Output directory.
     teacher_pkl         = None,     # Pretrained teacher network pickle.
     loss_kwargs         = {},       # Options for loss function.
-    optimizer_kwargs    = {},       # Options for optimizer.
+    generator_optimizer_kwargs    = {},       # Options for generator optimizer.
+    student_optimizer_kwargs    = {},       # Options for student optimizer.
     seed                = 0,        # Global random seed.
     batch_size          = 256,      # Total batch size for one training iteration.
     batch_gpu           = None,     # Limit batch size per GPU, None = no limit.
-    total_kimg          = 200_000,   # Training duration, measured in thousands of training images.
-    ema_halflife_kimg   = 500,      # Half-life of the exponential moving average (EMA) of model weights.
-    ema_rampup_ratio    = 0.05,     # EMA ramp-up coefficient, None = no rampup.
-    lr_rampup_kimg      = 10000,    # Learning rate ramp-up duration.
+    total_iter          = 15_000,   # Training duration, measured in thousands of training images.
+    lr_rampup_iter      = 1_000,    # Learning rate ramp-up duration.
     loss_scaling        = 1,        # Loss scaling factor for reducing FP16 under/overflows.
-    kimg_per_tick       = 50,       # Interval of progress prints.
-    snapshot_ticks      = 50,       # How often to save network snapshots, None = disable.
+    iters_per_tick      = 500,       # Interval of progress prints.
+    snapshot_ticks      = 2,       # How often to save network snapshots, None = disable.
     resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
     resume_kimg         = 0,        # Start from the given training progress.
     cudnn_benchmark     = True,     # Enable torch.backends.cudnn.benchmark?
@@ -40,6 +39,13 @@ def training_loop(
     generator_num_steps = 1,
     generator_multistep_mode = "uniform",
 ):
+    # Translate iteration into kimg
+    def iter_to_kimg(iter: int):
+        return iter * batch_size // 1000
+    total_kimg = iter_to_kimg(total_iter)
+    lr_rampup_kimg = iter_to_kimg(lr_rampup_iter)
+    kimg_per_tick = iter_to_kimg(iters_per_tick)
+
     # Initialize.
     start_time = time.time()
     np.random.seed((seed * dist.get_world_size() + dist.get_rank()) % (1 << 31))
@@ -63,16 +69,19 @@ def training_loop(
         torch.distributed.barrier() # rank 0 goes first
     with dnnlib.util.open_url(teacher_pkl, verbose=(dist.get_rank() == 0)) as f:
         data = pickle.load(f)
+    if dist.get_rank() == 0:
+        torch.distributed.barrier() # other ranks follow
     teacher_net = data['ema'].eval().requires_grad_(False).to(device)
     del data # conserve memory
+
+    dist.print0('Creating student model...')
+    student_net = copy.deepcopy(teacher_net).train().requires_grad_(True).to(device)
 
     dist.print0('Creating generator model...')
     generator_net = copy.deepcopy(teacher_net).train().requires_grad_(True).to(device)
     generator_net.num_steps = generator_num_steps
     generator_net.multistep_mode = generator_multistep_mode
 
-    dist.print0('Creating student model...')
-    student_net = copy.deepcopy(teacher_net).train().requires_grad_(True).to(device)
 
     if dist.get_rank() == 0:
         B = batch_size // dist.get_world_size()
@@ -87,10 +96,10 @@ def training_loop(
     loss_kwargs.D = D
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs) # training.idmd_loss.EDMLoss
 
-    student_optimizer = dnnlib.util.construct_class_by_name(params=student_net.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
+    student_optimizer = dnnlib.util.construct_class_by_name(params=student_net.parameters(), **student_optimizer_kwargs) # subclass of torch.optim.Optimizer
     student_ddp = torch.nn.parallel.DistributedDataParallel(student_net, device_ids=[device], broadcast_buffers=False)
 
-    generator_optimizer = dnnlib.util.construct_class_by_name(params=generator_net.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
+    generator_optimizer = dnnlib.util.construct_class_by_name(params=generator_net.parameters(), **generator_optimizer_kwargs) # subclass of torch.optim.Optimizer
     generator_ddp = torch.nn.parallel.DistributedDataParallel(generator_net, device_ids=[device], broadcast_buffers=False)
     ema = copy.deepcopy(generator_net).eval().requires_grad_(False)
 
@@ -111,7 +120,7 @@ def training_loop(
         misc.copy_params_and_buffers(src_module=data['ema'], dst_module=ema, require_all=False)
         generator_optimizer.load_state_dict(data['generator_optimizer_state'])
         student_optimizer.load_state_dict(data['student_optimizer_state'])
-        cur_nimg = data['step']
+        cur_nimg = data['cur_nimg']
         cur_tick = cur_nimg // (1000 * kimg_per_tick)
         del data # conserve memory
 
@@ -123,7 +132,6 @@ def training_loop(
     maintenance_time = tick_start_time - start_time
     dist.update_progress(cur_nimg // 1000, total_kimg)
     stats_jsonl = None
-    it = 0
     while True:
         # Update student
         for _ in range(n_student_updates):
@@ -145,7 +153,7 @@ def training_loop(
                         labels = torch.eye(teacher_net.label_dim, device=device)[label_indices]
                     with torch.no_grad():
                         images = idmd_sampler(
-                            net=generator_net,
+                            net=generator_ddp.module,
                             latents=latents,
                             class_labels=labels,
                             sigma_min=teacher_net.sigma_min,
@@ -162,7 +170,7 @@ def training_loop(
                     student_loss.sum().mul(loss_scaling / (batch_size // dist.get_world_size())).backward()
 
             for g in student_optimizer.param_groups:
-                g['lr'] = optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
+                g['lr'] = student_optimizer_kwargs['lr'] * min(cur_nimg * n_student_updates / max(lr_rampup_kimg * 1000, 1e-8), 1)
             for param in student_net.parameters():
                 if param.grad is not None:
                     torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
@@ -196,7 +204,7 @@ def training_loop(
                 )
                 distillation_loss = loss_fn.distillation_loss(
                     teacher_net=teacher_net,
-                    student_net=student_net,
+                    student_net=student_ddp.module,
                     images=images,
                     labels=labels
                 )
@@ -204,23 +212,15 @@ def training_loop(
                 dist.print0("loss:", distillation_loss.mean().item())
                 distillation_loss.sum().mul(loss_scaling / (batch_size // dist.get_world_size())).backward()
 
-        it += 1
-
         # Update weights.
         for g in generator_optimizer.param_groups:
-            g['lr'] = optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
+            g['lr'] = generator_optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
         for param in generator_net.parameters():
             if param.grad is not None:
                 torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
         generator_optimizer.step()
 
-        # TODO: Update EMA.
-        ema_halflife_nimg = ema_halflife_kimg * 1000
-        if ema_rampup_ratio is not None:
-            ema_halflife_nimg = min(ema_halflife_nimg, cur_nimg * ema_rampup_ratio)
-        ema_beta = 0.5 ** (batch_size / max(ema_halflife_nimg, 1e-8))
-        for p_ema, p_net in zip(ema.parameters(), generator_net.parameters()):
-            p_ema.copy_(p_net.detach().lerp(p_ema, ema_beta))
+        # TODO: Update EMA
 
         # Perform maintenance tasks once per tick.
         cur_nimg += batch_size
@@ -257,6 +257,7 @@ def training_loop(
                 student=student_net,
                 generator_optimizer_state=generator_optimizer.state_dict(),
                 student_optimizer_state=student_optimizer.state_dict(),
+                cur_nimg=cur_nimg,
             )
             for key, value in data.items():
                 if isinstance(value, torch.nn.Module):
@@ -276,6 +277,8 @@ def training_loop(
                 stats_jsonl = open(os.path.join(run_dir, 'stats.jsonl'), 'at')
             stats_jsonl.write(json.dumps(dict(training_stats.default_collector.as_dict(), timestamp=time.time())) + '\n')
             stats_jsonl.flush()
+            if stats_jsonl is not None:
+                stats_jsonl.close()
         dist.update_progress(cur_nimg // 1000, total_kimg)
 
         # Update state.
