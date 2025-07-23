@@ -52,13 +52,18 @@ def sample_from_posterior(
 
     return images + perturbation_x
 
-# def sample_from_prior(
-#     *,
-#     sample_size: int,
-#     shape: tuple,
-#     sigma_max: sigma_max,
-#     #
-#     D: int | str = "inf",
-#     #
-#     seed: Optional[int]=None
-# ):
+def sample_from_prior(
+    *,
+    sample_size: int,
+    shape: tuple,
+    sigma_max: float,
+    D: int | str,
+    #
+    device: torch.device,
+    dtype: torch.dtype,
+    #
+    seed: Optional[int]=None
+):
+    images = torch.zeros(sample_size, *shape, device=device, dtype=dtype)
+    sigma = torch.full((sample_size,), sigma_max, device=device, dtype=dtype)
+    return sample_from_posterior(images=images, sigma=sigma, D=D, seed=seed)
