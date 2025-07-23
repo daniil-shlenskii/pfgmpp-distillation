@@ -16,14 +16,14 @@ from torch_utils import misc, training_stats
 
 #----------------------------------------------------------------------------
 
-def training_loop(
+def distillation_loop(
     run_dir             = '.',      # Output directory.
     teacher_pkl         = None,     # Pretrained teacher network pickle.
     loss_kwargs         = {},       # Options for loss function.
     generator_optimizer_kwargs    = {},       # Options for generator optimizer.
     student_optimizer_kwargs    = {},       # Options for student optimizer.
     seed                = 0,        # Global random seed.
-    batch_size          = 256,      # Total batch size for one training iteration.
+    batch_size          = 512,      # Total batch size for one training iteration.
     batch_gpu           = None,     # Limit batch size per GPU, None = no limit.
     total_iter          = 15_000,   # Training duration, measured in thousands of training images.
     lr_rampup_iter      = 1_000,    # Learning rate ramp-up duration.
@@ -31,7 +31,7 @@ def training_loop(
     iters_per_tick      = 500,       # Interval of progress prints.
     snapshot_ticks      = 2,       # How often to save network snapshots, None = disable.
     resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
-    resume_kimg         = 0,        # Start from the given training progress.
+    resume_iter         = 0,        # Start from the given training progress.
     cudnn_benchmark     = True,     # Enable torch.backends.cudnn.benchmark?
     device              = torch.device('cuda'),
     D                   = 128,
@@ -45,6 +45,7 @@ def training_loop(
     total_kimg = iter_to_kimg(total_iter)
     lr_rampup_kimg = iter_to_kimg(lr_rampup_iter)
     kimg_per_tick = iter_to_kimg(iters_per_tick)
+    resume_kimg = iter_to_kimg(resume_iter)
 
     # Initialize.
     start_time = time.time()
