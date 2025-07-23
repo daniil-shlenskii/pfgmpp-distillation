@@ -18,12 +18,13 @@ def sample_from_posterior(
     seed: Optional[int]=None
 ):
     if D == "inf": # EDM case
-        perturbation_x = torch.randn_like(images) * sigma
+        perturbation_x = torch.randn_like(images) * sigma.view(-1, 1, 1, 1)
     else: # PFGMPP case
+        assert isinstance(D, int)
         data_dim = np.prod(images.shape[1:])
 
         # Convert sigma to r
-        r = sigma * D**0.5
+        r = sigma.reshape(-1) * D**0.5
 
         # Sample from inverse-beta distribution
         samples_norm = np.random.beta(
@@ -44,7 +45,7 @@ def sample_from_posterior(
         unit_gaussian = gaussian / torch.norm(gaussian, p=2, dim=1, keepdim=True)
 
         # Construct the perturbation for x
-        perturbation_x = unit_gaussian * samples_norm
+        perturbation_x = unit_gaussian * R
         perturbation_x = perturbation_x.float()
 
         perturbation_x = perturbation_x.view_as(images)
