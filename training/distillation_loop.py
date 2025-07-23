@@ -22,9 +22,9 @@ def training_loop(
     loss_kwargs         = {},       # Options for loss function.
     optimizer_kwargs    = {},       # Options for optimizer.
     seed                = 0,        # Global random seed.
-    batch_size          = 512,      # Total batch size for one training iteration.
+    batch_size          = 256,      # Total batch size for one training iteration.
     batch_gpu           = None,     # Limit batch size per GPU, None = no limit.
-    total_kimg          = 200000,   # Training duration, measured in thousands of training images.
+    total_kimg          = 200_000,   # Training duration, measured in thousands of training images.
     ema_halflife_kimg   = 500,      # Half-life of the exponential moving average (EMA) of model weights.
     ema_rampup_ratio    = 0.05,     # EMA ramp-up coefficient, None = no rampup.
     lr_rampup_kimg      = 10000,    # Learning rate ramp-up duration.
@@ -36,7 +36,7 @@ def training_loop(
     cudnn_benchmark     = True,     # Enable torch.backends.cudnn.benchmark?
     device              = torch.device('cuda'),
     D                   = 128,
-    update_generator_every = 1,
+    n_student_updates = 1,
     generator_num_steps = 1,
     generator_multistep_mode = "uniform",
 ):
@@ -125,13 +125,53 @@ def training_loop(
     stats_jsonl = None
     it = 0
     while True:
-        # Accumulate gradients.
-        generator_optimizer.zero_grad(set_to_none=True)
-        student_optimizer.zero_grad(set_to_none=True)
-        for round_idx in range(num_accumulation_rounds):
-            with misc.ddp_sync(student_ddp, (round_idx == num_accumulation_rounds - 1)), \
-                 misc.ddp_sync(generator_ddp, (round_idx == num_accumulation_rounds - 1)):
+        # Update student
+        for _ in range(n_student_updates):
+            # Accumulate gradients.
+            student_optimizer.zero_grad(set_to_none=True)
+            for round_idx in range(num_accumulation_rounds):
+                with misc.ddp_sync(student_ddp, (round_idx == num_accumulation_rounds - 1)):
+                    latents = sample_from_prior(
+                        sample_size=batch_gpu,
+                        shape=(teacher_net.img_channels, teacher_net.img_resolution, teacher_net.img_resolution),
+                        sigma_max=teacher_net.sigma_max,
+                        D=D,
+                        device=device,
+                        dtype=torch.float32,
+                    )
+                    labels = None
+                    if teacher_net.label_dim > 0:
+                        label_indices = torch.randint(low=0, high=teacher_net.label_dim, size=(batch_gpu,), device=device)
+                        labels = torch.eye(teacher_net.label_dim, device=device)[label_indices]
+                    with torch.no_grad():
+                        images = idmd_sampler(
+                            net=generator_net,
+                            latents=latents,
+                            class_labels=labels,
+                            sigma_min=teacher_net.sigma_min,
+                            sigma_max=teacher_net.sigma_max,
+                            D=D,
+                            num_steps=generator_num_steps,
+                            multistep_mode=generator_multistep_mode,
+                        )
+                    student_loss = loss_fn.primal_loss(
+                        net=student_ddp,
+                        images=images,
+                        labels=labels
+                    )
+                    student_loss.sum().mul(loss_scaling / (batch_size // dist.get_world_size())).backward()
 
+            for g in student_optimizer.param_groups:
+                g['lr'] = optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
+            for param in student_net.parameters():
+                if param.grad is not None:
+                    torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
+            student_optimizer.step()
+
+        # Update generator
+        generator_optimizer.zero_grad(set_to_none=True)
+        for round_idx in range(num_accumulation_rounds):
+            with misc.ddp_sync(generator_ddp, (round_idx == num_accumulation_rounds - 1)):
                 latents = sample_from_prior(
                     sample_size=batch_gpu,
                     shape=(teacher_net.img_channels, teacher_net.img_resolution, teacher_net.img_resolution),
@@ -140,13 +180,11 @@ def training_loop(
                     device=device,
                     dtype=torch.float32,
                 )
-
                 labels = None
                 if teacher_net.label_dim > 0:
                     label_indices = torch.randint(low=0, high=teacher_net.label_dim, size=(batch_gpu,), device=device)
                     labels = torch.eye(teacher_net.label_dim, device=device)[label_indices]
-
-                sampling_kwargs = dict(
+                images = idmd_sampler(
                     net=generator_ddp,
                     latents=latents,
                     class_labels=labels,
@@ -156,28 +194,16 @@ def training_loop(
                     num_steps=generator_num_steps,
                     multistep_mode=generator_multistep_mode,
                 )
-                if it % update_generator_every == 0:
-                    images = idmd_sampler(**sampling_kwargs)
-                    loss = loss_fn.distillation_loss(
-                        teacher_net=teacher_net,
-                        student_net=student_net,
-                        images=images,
-                        labels=labels
-                    )
-                    training_stats.report('Loss/generator_loss', loss)
-                    dist.print0("generator loss:", loss.mean().item())
-                else:
-                    with torch.no_grad():
-                        images = idmd_sampler(**sampling_kwargs)
-                    loss = loss_fn.primal_loss(
-                        net=student_net,
-                        images=images,
-                        labels=labels
-                    )
-                    training_stats.report('Loss/student_loss', loss)
-                    dist.print0("student loss:", loss.mean().item())
+                distillation_loss = loss_fn.distillation_loss(
+                    teacher_net=teacher_net,
+                    student_net=student_net,
+                    images=images,
+                    labels=labels
+                )
+                training_stats.report('Loss/loss', distillation_loss)
+                dist.print0("loss:", distillation_loss.mean().item())
+                distillation_loss.sum().mul(loss_scaling / (batch_size // dist.get_world_size())).backward()
 
-                loss.sum().mul(loss_scaling / (batch_size // dist.get_world_size())).backward()
         it += 1
 
         # Update weights.
@@ -187,13 +213,6 @@ def training_loop(
             if param.grad is not None:
                 torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
         generator_optimizer.step()
-
-        for g in student_optimizer.param_groups:
-            g['lr'] = optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
-        for param in student_net.parameters():
-            if param.grad is not None:
-                torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
-        student_optimizer.step()
 
         # TODO: Update EMA.
         ema_halflife_nimg = ema_halflife_kimg * 1000
