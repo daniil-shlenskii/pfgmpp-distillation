@@ -40,7 +40,7 @@ def parse_int_list(s):
 @click.option('--precond',       help='edm | vp | ve',                                metavar='STR', type=str, default="edm", show_default=True)
 
 # Hyperparameters
-@click.option('--duration',      help='Training duration',                            metavar='ITERS',  type=click.FloatRange(min=0, min_open=True), default=15_000, show_default=True)
+@click.option('--duration',      help='Training duration',                            metavar='ITERS',  type=click.FloatRange(min=0, min_open=True), default=20_000, show_default=True)
 @click.option('--batch',         help='Total batch size',                             metavar='INT',    type=click.IntRange(min=1), default=512, show_default=True)
 @click.option('--batch-gpu',     help='Limit batch size per GPU',                     metavar='INT',    type=click.IntRange(min=1))
 @click.option('--student_lr',    help='Student Learning rate',                        metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=10e-4, show_default=True)
@@ -58,7 +58,7 @@ def parse_int_list(s):
 @click.option('--desc',          help='String to include in result dir name',         metavar='STR',    type=str)
 @click.option('--nosubdir',      help='Do not create a subdirectory for results',                      is_flag=True)
 @click.option('--tick',          help='How often to print progress',                  metavar='ITERS',  type=click.IntRange(min=1), default=500, show_default=True)
-@click.option('--snap',          help='How often to save snapshots',                  metavar='TICKS',  type=click.IntRange(min=1), default=2, show_default=True)
+@click.option('--snap',          help='How often to save snapshots',                  metavar='TICKS',  type=click.IntRange(min=1), default=5, show_default=True)
 @click.option('--seed',          help='Random seed [default: random]',                metavar='INT',    type=int)
 @click.option('--resume_pkl',    help='Resume from previous training state',          metavar='PKL',    type=str)
 @click.option('-n', '--dry-run', help='Print training options and exit',                               is_flag=True)

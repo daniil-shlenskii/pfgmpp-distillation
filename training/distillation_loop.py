@@ -30,17 +30,17 @@ def distillation_loop(
     seed                = 0,        # Global random seed.
     batch_size          = 512,      # Total batch size for one training iteration.
     batch_gpu           = None,     # Limit batch size per GPU, None = no limit.
-    total_iter          = 15_000,   # Training duration, measured in thousands of training images.
+    total_iter          = 20_000,   # Training duration
     lr_rampup_iter      = 1_000,    # Learning rate ramp-up duration.
     loss_scaling        = 1,        # Loss scaling factor for reducing FP16 under/overflows.
     iters_per_tick      = 500,       # Interval of progress prints.
-    snapshot_ticks      = 2,       # How often to save network snapshots, None = disable.
+    snapshot_ticks      = 5,       # How often to save network snapshots, None = disable.
     resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
     resume_iter         = 0,        # Start from the given training progress.
     cudnn_benchmark     = True,     # Enable torch.backends.cudnn.benchmark?
     device              = torch.device('cuda'),
-    D                   = 128,
-    n_student_updates = 1,
+    D                   = "inf",
+    n_student_updates = 5,
     generator_num_steps = 1,
     generator_multistep_mode = "uniform",
     ema_decays          = [0.99, 0.995, 0.999, 0.9999],
@@ -70,7 +70,7 @@ def distillation_loop(
     assert batch_size == batch_gpu * num_accumulation_rounds * dist.get_world_size()
 
     # Construct networks
-    dist.print0('Loading teacher model...')
+    dist.print0(f'Loading teacher model from {teacher_pkl}...')
     assert teacher_pkl is not None, "teacher_pkl must be specified"
     if dist.get_rank() != 0:
         torch.distributed.barrier() # rank 0 goes first
@@ -239,7 +239,6 @@ def distillation_loop(
                 torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
         generator_optimizer.step()
 
-        # TODO: Update EMA
         for ema_key in emas:
             EMAHelper.update(
                 ema_model=emas[ema_key],
