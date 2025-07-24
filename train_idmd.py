@@ -45,7 +45,7 @@ def parse_int_list(s):
 @click.option('--batch',         help='Total batch size',                             metavar='INT',    type=click.IntRange(min=1), default=512, show_default=True)
 @click.option('--batch-gpu',     help='Limit batch size per GPU',                     metavar='INT',    type=click.IntRange(min=1))
 @click.option('--student_lr',    help='Student Learning rate',                        metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=10e-4, show_default=True)
-@click.option('--generator_lr',  help='Generator Learning rate',                      metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=1e-5, show_default=True)
+@click.option('--generator_lr',  help='Generator Learning rate',                      metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=5e-5, show_default=True)
 @click.option('--generator_beta1', help="Generator Adam's beta1",                     metavar='FLOAT',  type=click.FloatRange(min=0, min_open=False), default=0.0, show_default=True)
 @click.option('--generator_beta2', help="Generator Adam's beta2 Learning rate",       metavar='FLOAT',  type=click.FloatRange(min=0, min_open=False), default=0.999, show_default=True)
 @click.option('--remove_dropout', help='Remove dropout from teacher',    metavar='BOOL',   type=bool, default=True, show_default=True)
@@ -61,7 +61,7 @@ def parse_int_list(s):
 @click.option('--tick',          help='How often to print progress',                  metavar='ITERS',  type=click.IntRange(min=1), default=500, show_default=True)
 @click.option('--snap',          help='How often to save snapshots',                  metavar='TICKS',  type=click.IntRange(min=1), default=5, show_default=True)
 @click.option('--seed',          help='Random seed [default: random]',                metavar='INT',    type=int)
-@click.option('--resume_pkl',    help='Resume from previous training state',          metavar='PKL',    type=str)
+@click.option('--resume_pkl',    help='Resume from previous training state',          metavar='PKL|URL',    type=str)
 @click.option('-n', '--dry-run', help='Print training options and exit',                               is_flag=True)
 
 def main(**kwargs):
