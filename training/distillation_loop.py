@@ -1,4 +1,5 @@
 import copy
+import math
 import json
 import os
 import pickle
@@ -47,7 +48,7 @@ def distillation_loop(
 ):
     # Translate iteration into kimg
     def iter_to_kimg(iter: int):
-        return iter * batch_size // 1000
+        return math.ceil(iter * batch_size / 1000)
     total_kimg = iter_to_kimg(total_iter)
     lr_rampup_kimg = iter_to_kimg(lr_rampup_iter)
     kimg_per_tick = iter_to_kimg(iters_per_tick)
@@ -301,8 +302,6 @@ def distillation_loop(
                 stats_jsonl = open(os.path.join(run_dir, 'stats.jsonl'), 'at')
             stats_jsonl.write(json.dumps(dict(training_stats.default_collector.as_dict(), timestamp=time.time())) + '\n')
             stats_jsonl.flush()
-            if stats_jsonl is not None:
-                stats_jsonl.close()
         dist.update_progress(cur_nimg // 1000, total_kimg)
 
         # Update state.
