@@ -47,7 +47,7 @@ def parse_int_list(s):
 @click.option('--generator_lr',  help='Generator Learning rate',                      metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=10e-4, show_default=True)
 @click.option('--generator_beta1', help="Generator Adam's beta1",                     metavar='FLOAT',  type=click.FloatRange(min=0, min_open=False), default=0.9, show_default=True)
 @click.option('--generator_beta2', help="Generator Adam's beta2 Learning rate",       metavar='FLOAT',  type=click.FloatRange(min=0, min_open=False), default=0.999, show_default=True)
-@click.option('--remove_dropout_from_teacher', help='Remove dropout from teacher',    metavar='BOOL',   type=bool, default=True, show_default=True)
+@click.option('--remove_dropout', help='Remove dropout from teacher',    metavar='BOOL',   type=bool, default=True, show_default=True)
 @click.option('--n_student_updates', help='',    metavar='INT',   type=int, default=2, show_default=True)
 
 # Performance-related
@@ -82,6 +82,7 @@ def main(**kwargs):
     #     raise NotImplementedError()
 
     c.teacher_pkl = opts.teacher_pkl
+    c.preprocess_edm_net_kwargs = {"remove_dropout": opts.remove_dropout}
     c.sigma_min = opts.sigma_min
     c.sigma_max = opts.sigma_max
     c.D = opts.aug_dim

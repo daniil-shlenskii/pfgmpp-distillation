@@ -11,6 +11,7 @@ import torch
 import dnnlib
 from generate_idmd import idmd_sampler
 from idmd.utils.pfgmpp_utils import sample_from_prior
+from idmd.utils.preprocess_edm_model import preprocess_edm_net
 from torch_utils import distributed as dist
 from torch_utils import misc, training_stats
 
@@ -19,6 +20,7 @@ from torch_utils import misc, training_stats
 def distillation_loop(
     run_dir             = '.',      # Output directory.
     teacher_pkl         = None,     # Pretrained teacher network pickle.
+    preprocess_edm_net_kwargs = {},
     sigma_min           = 0.002,
     sigma_max           = 80.,
     loss_kwargs         = {},       # Options for loss function.
@@ -76,6 +78,8 @@ def distillation_loop(
         torch.distributed.barrier() # other ranks follow
     teacher_net = copy.deepcopy(data['ema']).eval().requires_grad_(True).to(device)
     del data # conserve memory
+
+    preprocess_edm_net(teacher_net, **preprocess_edm_net_kwargs)
 
     dist.print0('Creating student model...')
     student_net = copy.deepcopy(teacher_net).train().requires_grad_(True).to(device)
