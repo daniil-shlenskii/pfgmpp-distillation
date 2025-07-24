@@ -174,7 +174,6 @@ def distillation_loop(
                         images=images,
                         labels=labels
                     )
-                    dist.print0("student loss:", student_loss.mean().item())
                     student_loss.sum().mul(loss_scaling / (batch_size // dist.get_world_size())).backward()
 
             for g in student_optimizer.param_groups:
