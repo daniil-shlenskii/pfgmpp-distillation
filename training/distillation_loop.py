@@ -128,7 +128,7 @@ def distillation_loop(
             torch.distributed.barrier() # other ranks follow
         misc.copy_params_and_buffers(src_module=data['generator'], dst_module=generator_net, require_all=False)
         misc.copy_params_and_buffers(src_module=data['student'], dst_module=student_net, require_all=False)
-        for ema_key in emas
+        for ema_key in emas:
             if ema_key in data:
                 misc.copy_params_and_buffers(src_module=data[ema_key], dst_module=emas[ema_key], require_all=False)
         generator_optimizer.load_state_dict(data['generator_optimizer_state'])
