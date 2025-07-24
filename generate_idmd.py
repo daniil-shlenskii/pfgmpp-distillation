@@ -14,6 +14,7 @@ from torch.distributions import Beta
 from torchvision.utils import make_grid, save_image
 
 import dnnlib
+from idmd.utils.ema_helper import EMAHelper
 from idmd.utils.pfgmpp_utils import sample_from_posterior
 from torch_utils import distributed as dist
 from torch_utils import misc
@@ -46,10 +47,10 @@ def idmd_sampler(
         sigma_min=sigma_min,
         sigma_max=sigma_max
     )
-    x_noisy = latents.to(torch.float64)
+    x_noisy = latents
     for i, sigma in enumerate(sigma_schedule):
         sigma = torch.tensor([sigma] * len(x_noisy), dtype=x_noisy.dtype, device=x_noisy.device)
-        x_denoised = net(x_noisy, sigma, class_labels).to(torch.float64)
+        x_denoised = net(x_noisy, sigma, class_labels)
         if i < len(sigma_schedule) - 1:
             sigma_next = sigma_schedule[i + 1]
             sigma_next = torch.tensor([sigma_next] * len(x_noisy), dtype=x_noisy.dtype, device=x_noisy.device)
@@ -117,6 +118,7 @@ def parse_int_list(s):
 
 @click.command()
 @click.option('--network', 'network_pkl',  help='Network pickle filename', metavar='PATH|URL',                      type=str)
+@click.option('--ema_decay',  help='', metavar='FLOAT',                      type=float, default=0.99, show_default=True)
 @click.option('--outdir',                  help='Where to save the output images', metavar='DIR',                   type=str, required=True)
 @click.option('--seeds',                   help='Random seeds (e.g. 1,2,5-10)', metavar='LIST',                     type=parse_int_list, default='0-63', show_default=True)
 @click.option('--subdirs',                 help='Create subdirectory for every 1000 seeds',                         is_flag=True)
@@ -133,6 +135,7 @@ def parse_int_list(s):
 
 def main(
     network_pkl,
+    ema_decay,
     outdir,
     seeds,
     subdirs,
@@ -160,8 +163,16 @@ def main(
     dist.print0(f'Loading network from "{network_pkl}"...')
     if dist.get_rank() != 0:
         torch.distributed.barrier()
-    with dnnlib.util.open_url(network_pkl, verbose=(dist.get_rank() == 0)) as f:
-        net = pickle.load(f)['ema'].to(device).eval()
+    if network_pkl.endswith("pt"):
+        with open(network_pkl, "rb") as f:
+            data = torch.load(f, map_location=torch.device('cpu'), weights_only=False)
+    else:
+        with dnnlib.util.open_url(network_pkl, verbose=(dist.get_rank() == 0)) as f:
+            data = pickle.load(f)
+    ema_key = "ema"
+    if ema_key not in data:
+        ema_key = EMAHelper.decay_to_key(ema_decay)
+    net = data[ema_key].to(device).eval()
     if dist.get_rank() == 0:
         torch.distributed.barrier()
 
@@ -185,6 +196,7 @@ def main(
             latents = rnd.randn([batch_size, net.img_channels, net.img_resolution, net.img_resolution], sigma_max=sigma_max, device=device)
         else: # PFGMPP case
             latents = rnd.rand_beta_prime([batch_size, net.img_channels, net.img_resolution, net.img_resolution], sigma_max=sigma_max, D=aug_dim, device=device)
+        latents = latents.to(torch.float64)
 
         # Create labels if applicable
         class_labels = None
