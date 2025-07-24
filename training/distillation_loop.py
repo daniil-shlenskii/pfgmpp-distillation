@@ -1,4 +1,5 @@
 import copy
+import math
 import json
 import os
 import pickle
@@ -47,7 +48,7 @@ def distillation_loop(
 ):
     # Translate iteration into kimg
     def iter_to_kimg(iter: int):
-        return iter * batch_size // 1000
+        return math.ceil(iter * batch_size / 1000)
     total_kimg = iter_to_kimg(total_iter)
     lr_rampup_kimg = iter_to_kimg(lr_rampup_iter)
     kimg_per_tick = iter_to_kimg(iters_per_tick)
@@ -128,7 +129,7 @@ def distillation_loop(
             torch.distributed.barrier() # other ranks follow
         misc.copy_params_and_buffers(src_module=data['generator'], dst_module=generator_net, require_all=False)
         misc.copy_params_and_buffers(src_module=data['student'], dst_module=student_net, require_all=False)
-        for ema_key in emas
+        for ema_key in emas:
             if ema_key in data:
                 misc.copy_params_and_buffers(src_module=data[ema_key], dst_module=emas[ema_key], require_all=False)
         generator_optimizer.load_state_dict(data['generator_optimizer_state'])
@@ -301,8 +302,6 @@ def distillation_loop(
                 stats_jsonl = open(os.path.join(run_dir, 'stats.jsonl'), 'at')
             stats_jsonl.write(json.dumps(dict(training_stats.default_collector.as_dict(), timestamp=time.time())) + '\n')
             stats_jsonl.flush()
-            if stats_jsonl is not None:
-                stats_jsonl.close()
         dist.update_progress(cur_nimg // 1000, total_kimg)
 
         # Update state.
