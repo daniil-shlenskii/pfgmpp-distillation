@@ -16,7 +16,7 @@ fi
 #
 # Download the file using gdown
 CKPT_NAME="$2"
-SAVE_PATH="${CHECKPOINTS_DIR}/${CKPT_NAME}.pkl"
+SAVE_PATH="${CHECKPOINTS_DIR}/${CKPT_NAME}"
 echo "Downloading checkpoint..."
 gdown "https://drive.google.com/uc?export=download&id=$FILE_ID" -O $SAVE_PATH
 

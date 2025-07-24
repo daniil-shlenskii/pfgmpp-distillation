@@ -45,7 +45,7 @@ def parse_int_list(s):
 @click.option('--batch',         help='Total batch size',                             metavar='INT',    type=click.IntRange(min=1), default=512, show_default=True)
 @click.option('--batch-gpu',     help='Limit batch size per GPU',                     metavar='INT',    type=click.IntRange(min=1))
 @click.option('--student_lr',    help='Student Learning rate',                        metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=10e-4, show_default=True)
-@click.option('--generator_lr',  help='Generator Learning rate',                      metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=5e-5, show_default=True)
+@click.option('--generator_lr',  help='Generator Learning rate',                      metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=1e-5, show_default=True)
 @click.option('--generator_beta1', help="Generator Adam's beta1",                     metavar='FLOAT',  type=click.FloatRange(min=0, min_open=False), default=0.0, show_default=True)
 @click.option('--generator_beta2', help="Generator Adam's beta2 Learning rate",       metavar='FLOAT',  type=click.FloatRange(min=0, min_open=False), default=0.999, show_default=True)
 @click.option('--remove_dropout', help='Remove dropout from teacher',    metavar='BOOL',   type=bool, default=True, show_default=True)
@@ -85,6 +85,9 @@ def main(**kwargs):
     c.sigma_max = opts.sigma_max
     c.D = opts.aug_dim
     c.n_student_updates = opts.n_student_updates
+
+    if opts.resume_pkl is not None:
+        c.resume_pkl = opts.resume_pkl
 
     # Hyperparameters
     c.student_optimizer_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=opts.student_lr, betas=[0.9,0.999], eps=1e-8)

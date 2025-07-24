@@ -75,8 +75,12 @@ def distillation_loop(
     assert teacher_pkl is not None, "teacher_pkl must be specified"
     if dist.get_rank() != 0:
         torch.distributed.barrier() # rank 0 goes first
-    with dnnlib.util.open_url(teacher_pkl, verbose=(dist.get_rank() == 0)) as f:
-        data = pickle.load(f)
+    if teacher_pkl.endswith("pt"):
+        with open(teacher_pkl, "rb") as f:
+            data = torch.load(f, map_location=torch.device('cpu'), weights_only=False)
+    else:
+        with dnnlib.util.open_url(teacher_pkl, verbose=(dist.get_rank() == 0)) as f:
+            data = pickle.load(f)
     if dist.get_rank() == 0:
         torch.distributed.barrier() # other ranks follow
     teacher_net = copy.deepcopy(data['ema']).eval().requires_grad_(True).to(device)
@@ -123,11 +127,15 @@ def distillation_loop(
         dist.print0(f'Loading network weights from "{resume_pkl}"...')
         if dist.get_rank() != 0:
             torch.distributed.barrier() # rank 0 goes first
-        with dnnlib.util.open_url(resume_pkl, verbose=(dist.get_rank() == 0)) as f:
-            data = pickle.load(f)
+        if resume_pkl.endswith("pt"):
+            with open(resume_pkl, "rb") as f:
+                data = torch.load(f, map_location=torch.device('cpu'), weights_only=False)
+        else:
+            with dnnlib.util.open_url(resume_pkl, verbose=(dist.get_rank() == 0)) as f:
+                data = pickle.load(f)
         if dist.get_rank() == 0:
             torch.distributed.barrier() # other ranks follow
-        misc.copy_params_and_buffers(src_module=data['generator'], dst_module=generator_net, require_all=False)
+        misc.copy_params_and_buffers(src_module=data['generator'], dst_module=generator_net, require_all=True)
         misc.copy_params_and_buffers(src_module=data['student'], dst_module=student_net, require_all=False)
         for ema_key in emas:
             if ema_key in data:
@@ -184,6 +192,7 @@ def distillation_loop(
                         images=images,
                         labels=labels
                     )
+                    training_stats.report('Loss/student_loss', student_loss)
                     student_loss.sum().mul(loss_scaling / (batch_size // dist.get_world_size())).backward()
 
             for g in student_optimizer.param_groups:
@@ -199,7 +208,7 @@ def distillation_loop(
         student_ddp.eval()
         for round_idx in range(num_accumulation_rounds):
             with misc.ddp_sync(generator_ddp, (round_idx == num_accumulation_rounds - 1)):
-                latents = sample_from_prior(
+                latgnts = sample_from_prior(
                     sample_size=batch_gpu,
                     shape=(teacher_net.img_channels, teacher_net.img_resolution, teacher_net.img_resolution),
                     sigma_max=sigma_max,
@@ -228,8 +237,7 @@ def distillation_loop(
                     images=images,
                     labels=labels
                 )
-                training_stats.report('Loss/loss', distillation_loss)
-                dist.print0("loss:", distillation_loss.mean().item())
+                training_stats.report('Loss/distillation_loss', distillation_loss)
                 distillation_loss.sum().mul(loss_scaling / (batch_size // dist.get_world_size())).backward()
 
         # Update weights.
