@@ -10,6 +10,7 @@ import torch
 
 import dnnlib
 from generate_idmd import idmd_sampler
+from idmd.utils.ema_helper import EMAHelper
 from idmd.utils.pfgmpp_utils import sample_from_prior
 from idmd.utils.preprocess_edm_model import preprocess_edm_net
 from torch_utils import distributed as dist
@@ -42,6 +43,7 @@ def distillation_loop(
     n_student_updates = 1,
     generator_num_steps = 1,
     generator_multistep_mode = "uniform",
+    ema_decays          = [0.99, 0.995, 0.999, 0.9999],
 ):
     # Translate iteration into kimg
     def iter_to_kimg(iter: int):
@@ -100,12 +102,17 @@ def distillation_loop(
     loss_kwargs.D = D
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs) # training.idmd_loss.EDMLoss
 
+    generator_optimizer = dnnlib.util.construct_class_by_name(params=generator_net.parameters(), **generator_optimizer_kwargs) # subclass of torch.optim.Optimizer
+    generator_ddp = torch.nn.parallel.DistributedDataParallel(generator_net, device_ids=[device], broadcast_buffers=False)
+
     student_optimizer = dnnlib.util.construct_class_by_name(params=student_net.parameters(), **student_optimizer_kwargs) # subclass of torch.optim.Optimizer
     student_ddp = torch.nn.parallel.DistributedDataParallel(student_net, device_ids=[device], broadcast_buffers=False)
 
-    generator_optimizer = dnnlib.util.construct_class_by_name(params=generator_net.parameters(), **generator_optimizer_kwargs) # subclass of torch.optim.Optimizer
-    generator_ddp = torch.nn.parallel.DistributedDataParallel(generator_net, device_ids=[device], broadcast_buffers=False)
-    ema = copy.deepcopy(generator_net).eval().requires_grad_(False)
+    emas = {
+        EMAHelper.decay_to_key(decay):
+            copy.deepcopy(generator_net).eval().requires_grad_(False)
+        for decay in ema_decays
+    }
 
     cur_nimg = resume_kimg * 1000
     cur_tick = 0
@@ -121,7 +128,9 @@ def distillation_loop(
             torch.distributed.barrier() # other ranks follow
         misc.copy_params_and_buffers(src_module=data['generator'], dst_module=generator_net, require_all=False)
         misc.copy_params_and_buffers(src_module=data['student'], dst_module=student_net, require_all=False)
-        misc.copy_params_and_buffers(src_module=data['ema'], dst_module=ema, require_all=False)
+        for ema_key in emas
+            if ema_key in data:
+                misc.copy_params_and_buffers(src_module=data[ema_key], dst_module=emas[ema_key], require_all=False)
         generator_optimizer.load_state_dict(data['generator_optimizer_state'])
         student_optimizer.load_state_dict(data['student_optimizer_state'])
         cur_nimg = data['cur_nimg']
@@ -231,6 +240,12 @@ def distillation_loop(
         generator_optimizer.step()
 
         # TODO: Update EMA
+        for ema_key in emas:
+            EMAHelper.update(
+                ema_model=emas[ema_key],
+                online_model=generator_net,
+                decay=EMAHelper.key_to_decay(ema_key),
+            )
 
         # Perform maintenance tasks once per tick.
         cur_nimg += batch_size
@@ -262,13 +277,13 @@ def distillation_loop(
         # Save network snapshot.
         if (snapshot_ticks is not None) and (done or cur_tick % snapshot_ticks == 0):
             data = dict(
-                ema=ema,
                 generator=generator_net,
                 student=student_net,
                 generator_optimizer_state=generator_optimizer.state_dict(),
                 student_optimizer_state=student_optimizer.state_dict(),
                 cur_nimg=cur_nimg,
             )
+            data.update(emas)
             for key, value in data.items():
                 if isinstance(value, torch.nn.Module):
                     value = copy.deepcopy(value).eval().requires_grad_(False)
