@@ -34,7 +34,9 @@ def parse_int_list(s):
 # Main options
 @click.option('--outdir',        help='Where to save the results',                     metavar='DIR',    type=str, required=True)
 @click.option('--teacher_pkl',   help='Teacher Model (EDM-like format)',              metavar='PKL|URL', type=str, required=True)
-@click.option('--aug_dim',       help='PFGM++ D parameter',                           metavar='PKL|URL', type=str, required=True)
+@click.option('--sigma_min',     help='',                           metavar='FLOAT', type=float, default=0.002, show_default=True)
+@click.option('--sigma_max',     help='',                           metavar='FLOAT', type=float, default=80.0, show_default=True)
+@click.option('--aug_dim',       help='PFGM++ D parameter',                           metavar='STR|INT', type=str, default="inf", show_default=True)
 @click.option('--precond',       help='edm | vp | ve',                                metavar='STR', type=str, default="edm", show_default=True)
 
 # Hyperparameters
@@ -46,6 +48,7 @@ def parse_int_list(s):
 @click.option('--generator_beta1', help="Generator Adam's beta1",                     metavar='FLOAT',  type=click.FloatRange(min=0, min_open=False), default=0.9, show_default=True)
 @click.option('--generator_beta2', help="Generator Adam's beta2 Learning rate",       metavar='FLOAT',  type=click.FloatRange(min=0, min_open=False), default=0.999, show_default=True)
 @click.option('--remove_dropout_from_teacher', help='Remove dropout from teacher',    metavar='BOOL',   type=bool, default=True, show_default=True)
+@click.option('--n_student_updates', help='',    metavar='INT',   type=int, default=2, show_default=True)
 
 # Performance-related
 @click.option('--ls',            help='Loss scaling',                                metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=1, show_default=True)
@@ -67,22 +70,28 @@ def main(**kwargs):
 
     # Initialize config dict.
     c = dnnlib.EasyDict()
-    c.loss_kwargs = dnnlib.EasyDict()
-    c.student_optimizer_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=opts.student_lr, betas=[0.9,0.999], eps=1e-8)
-    c.generator_optimizer_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=opts.generator_lr, betas=[opts.generator_beta1,opts.generator_beta2], eps=1e-8)
 
     # Main options
     if dist.get_rank() != 0:
         c.run_dir = None
-    elif opts.nosubdir:
-        c.run_dir = opts.outdir
     else:
-        raise NotImplementedError()
+        c.run_dir = opts.outdir
+    # elif opts.nosubdir:
+    #     c.run_dir = opts.outdir
+    # else:
+    #     raise NotImplementedError()
 
     c.teacher_pkl = opts.teacher_pkl
+    c.sigma_min = opts.sigma_min
+    c.sigma_max = opts.sigma_max
     c.D = opts.aug_dim
+    c.n_student_updates = opts.n_student_updates
 
     # Hyperparameters
+    c.student_optimizer_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=opts.student_lr, betas=[0.9,0.999], eps=1e-8)
+    c.generator_optimizer_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=opts.generator_lr, betas=[opts.generator_beta1,opts.generator_beta2], eps=1e-8)
+
+    c.loss_kwargs = dnnlib.EasyDict()
     if opts.precond == 'edm':
         c.loss_kwargs.class_name = 'training.idmd_loss.EDMLoss'
         c.loss_kwargs.D = opts.aug_dim

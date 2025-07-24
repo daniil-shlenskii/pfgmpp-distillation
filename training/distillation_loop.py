@@ -19,6 +19,8 @@ from torch_utils import misc, training_stats
 def distillation_loop(
     run_dir             = '.',      # Output directory.
     teacher_pkl         = None,     # Pretrained teacher network pickle.
+    sigma_min           = 0.002,
+    sigma_max           = 80.,
     loss_kwargs         = {},       # Options for loss function.
     generator_optimizer_kwargs    = {},       # Options for generator optimizer.
     student_optimizer_kwargs    = {},       # Options for student optimizer.
@@ -72,7 +74,7 @@ def distillation_loop(
         data = pickle.load(f)
     if dist.get_rank() == 0:
         torch.distributed.barrier() # other ranks follow
-    teacher_net = data['ema'].eval().requires_grad_(False).to(device)
+    teacher_net = copy.deepcopy(data['ema']).eval().requires_grad_(True).to(device)
     del data # conserve memory
 
     dist.print0('Creating student model...')
@@ -80,9 +82,6 @@ def distillation_loop(
 
     dist.print0('Creating generator model...')
     generator_net = copy.deepcopy(teacher_net).train().requires_grad_(True).to(device)
-    generator_net.num_steps = generator_num_steps
-    generator_net.multistep_mode = generator_multistep_mode
-
 
     if dist.get_rank() == 0:
         B = batch_size // dist.get_world_size()
@@ -135,6 +134,8 @@ def distillation_loop(
     stats_jsonl = None
     while True:
         # Update student
+        student_ddp.train()
+        generator_ddp.eval()
         for _ in range(n_student_updates):
             # Accumulate gradients.
             student_optimizer.zero_grad(set_to_none=True)
@@ -143,7 +144,7 @@ def distillation_loop(
                     latents = sample_from_prior(
                         sample_size=batch_gpu,
                         shape=(teacher_net.img_channels, teacher_net.img_resolution, teacher_net.img_resolution),
-                        sigma_max=teacher_net.sigma_max,
+                        sigma_max=sigma_max,
                         D=D,
                         device=device,
                         dtype=torch.float32,
@@ -152,13 +153,14 @@ def distillation_loop(
                     if teacher_net.label_dim > 0:
                         label_indices = torch.randint(low=0, high=teacher_net.label_dim, size=(batch_gpu,), device=device)
                         labels = torch.eye(teacher_net.label_dim, device=device)[label_indices]
+
                     with torch.no_grad():
                         images = idmd_sampler(
                             net=generator_ddp.module,
                             latents=latents,
                             class_labels=labels,
-                            sigma_min=teacher_net.sigma_min,
-                            sigma_max=teacher_net.sigma_max,
+                            sigma_min=sigma_min,
+                            sigma_max=sigma_max,
                             D=D,
                             num_steps=generator_num_steps,
                             multistep_mode=generator_multistep_mode,
@@ -168,6 +170,7 @@ def distillation_loop(
                         images=images,
                         labels=labels
                     )
+                    dist.print0("student loss:", student_loss.mean().item())
                     student_loss.sum().mul(loss_scaling / (batch_size // dist.get_world_size())).backward()
 
             for g in student_optimizer.param_groups:
@@ -179,12 +182,14 @@ def distillation_loop(
 
         # Update generator
         generator_optimizer.zero_grad(set_to_none=True)
+        generator_ddp.train()
+        student_ddp.eval()
         for round_idx in range(num_accumulation_rounds):
             with misc.ddp_sync(generator_ddp, (round_idx == num_accumulation_rounds - 1)):
                 latents = sample_from_prior(
                     sample_size=batch_gpu,
                     shape=(teacher_net.img_channels, teacher_net.img_resolution, teacher_net.img_resolution),
-                    sigma_max=teacher_net.sigma_max,
+                    sigma_max=sigma_max,
                     D=D,
                     device=device,
                     dtype=torch.float32,
@@ -193,12 +198,13 @@ def distillation_loop(
                 if teacher_net.label_dim > 0:
                     label_indices = torch.randint(low=0, high=teacher_net.label_dim, size=(batch_gpu,), device=device)
                     labels = torch.eye(teacher_net.label_dim, device=device)[label_indices]
+
                 images = idmd_sampler(
                     net=generator_ddp,
                     latents=latents,
                     class_labels=labels,
-                    sigma_min=teacher_net.sigma_min,
-                    sigma_max=teacher_net.sigma_max,
+                    sigma_min=sigma_min,
+                    sigma_max=sigma_max,
                     D=D,
                     num_steps=generator_num_steps,
                     multistep_mode=generator_multistep_mode,
