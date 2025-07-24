@@ -7,6 +7,7 @@ import click
 import torch
 
 import dnnlib
+from idmd.constants import EXPERIMENTS_DIR
 from torch_utils import distributed as dist
 from training import distillation_loop
 
@@ -44,7 +45,7 @@ def parse_int_list(s):
 @click.option('--batch',         help='Total batch size',                             metavar='INT',    type=click.IntRange(min=1), default=512, show_default=True)
 @click.option('--batch-gpu',     help='Limit batch size per GPU',                     metavar='INT',    type=click.IntRange(min=1))
 @click.option('--student_lr',    help='Student Learning rate',                        metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=10e-4, show_default=True)
-@click.option('--generator_lr',  help='Generator Learning rate',                      metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=2e-5, show_default=True)
+@click.option('--generator_lr',  help='Generator Learning rate',                      metavar='FLOAT',  type=click.FloatRange(min=0, min_open=True), default=1e-5, show_default=True)
 @click.option('--generator_beta1', help="Generator Adam's beta1",                     metavar='FLOAT',  type=click.FloatRange(min=0, min_open=False), default=0.0, show_default=True)
 @click.option('--generator_beta2', help="Generator Adam's beta2 Learning rate",       metavar='FLOAT',  type=click.FloatRange(min=0, min_open=False), default=0.999, show_default=True)
 @click.option('--remove_dropout', help='Remove dropout from teacher',    metavar='BOOL',   type=bool, default=True, show_default=True)
@@ -75,11 +76,8 @@ def main(**kwargs):
     if dist.get_rank() != 0:
         c.run_dir = None
     else:
-        c.run_dir = opts.outdir
-    # elif opts.nosubdir:
-    #     c.run_dir = opts.outdir
-    # else:
-    #     raise NotImplementedError()
+        teacher_name = opts.teacher_pkl.split('/')[-1].split('.')[0]
+        c.run_dir = os.path.join(EXPERIMENTS_DIR, teacher_name, opts.outdir)
 
     c.teacher_pkl = opts.teacher_pkl
     c.preprocess_edm_net_kwargs = {"remove_dropout": opts.remove_dropout}
